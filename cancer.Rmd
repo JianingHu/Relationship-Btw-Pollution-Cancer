@@ -1,0 +1,42 @@
+---
+title: '91'
+author: "Yuchen Wu"
+date: "4/22/2022"
+output: html_document
+---
+
+```{r include=FALSE}
+library(dplyr)
+library(tidyr)
+```
+
+```{r}
+cancer_raw <- read.delim('d://desktop//5291//project//BYAREA.TXT', 
+                 sep = '|', header = TRUE)
+state <- read.csv('d://desktop//5291//project//abb.csv')
+```
+
+```{r}
+cancer <- cancer_raw %>%
+  filter(RACE == 'All Races' & SEX == 'Male and Female' & 
+           SITE == 'Lung and Bronchus') %>%
+  select(AREA, COUNT, EVENT_TYPE, POPULATION, YEAR) %>%
+  mutate(COUNT = as.integer(COUNT)) %>%
+  pivot_wider(names_from = EVENT_TYPE, values_from = COUNT) %>%
+  left_join(state, by=c('AREA'='ï..State')) %>% 
+  mutate(incidence_rate = Incidence/POPULATION,
+         mortality_rate = Mortality/POPULATION) %>%
+  select(AREA, Code, everything()) %>%
+  rename(state=AREA, state_abbr=Code, 
+         year=YEAR,population=POPULATION)
+```
+
+
+```{r}
+write.csv(x = cancer, file = "cancer.csv")
+```
+
+
+
+
+
