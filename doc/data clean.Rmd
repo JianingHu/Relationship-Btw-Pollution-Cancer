@@ -1,0 +1,40 @@
+# 5291 project data clean
+
+```{r}
+library(tidyverse)
+library(dplyr)
+```
+
+
+```{r}
+site <- read_csv("data/site.csv")
+Filter_Pack_Concentrations_Weekly <- read_csv("data/Filter Pack Concentrations - Weekly.csv")
+site_new<- site %>% select(SITE_ID,STATE,COUNTY,LATITUDE,LONGITUDE,ELEVATION)
+data <- full_join(site_new,Filter_Pack_Concentrations_Weekly,by='SITE_ID') %>%
+  select(-QA_CODE,-DATEON,-COMMENT_CODES,-UPDATE_DATE,-ELEVATION,-TYPE,-TEMP_SOURCE,-STD2LOCAL_CF) 
+```
+
+```{r}
+data$date <- as.Date(data$DATEOFF, "%m/%d/%Y")
+data<- data %>% select(-DATEOFF)
+```
+
+```{r}
+write.csv(data, file="./data/pollution with states by weekly.csv")
+```
+
+```{r}
+data$year <- format(as.Date(data$date, "%F"), "%Y")
+```
+
+```{r}
+data_year <- data %>% 
+  mutate(year = year,state = STATE) %>% 
+  group_by(state, year) %>% 
+  summarise(avg_TSO4 = mean(TSO4,na.rm=TRUE),avg_TNO3 = mean(TNO3,na.rm=TRUE),avg_TNH4 = mean(TNH4,na.rm=TRUE),avg_NSO4 = mean(NSO4,na.rm=TRUE),avg_NHNO3 = mean(NHNO3,na.rm=TRUE),avg_WSO2 = mean(WSO2,na.rm=TRUE),avg_WNO3 = mean(WNO3,na.rm=TRUE),avg_SO2 = mean(TOTAL_SO2,na.rm=TRUE), avg_NO3 = mean(TOTAL_NO3,na.rm=TRUE),avg_FLOW_VOLUME = mean(FLOW_VOLUME,na.rm=TRUE)) %>% 
+  ungroup()
+```
+```{r}
+write.csv(data_year, file="./data/pollution with states by year.csv")
+```
+
