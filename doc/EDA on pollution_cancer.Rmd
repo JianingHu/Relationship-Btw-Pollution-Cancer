@@ -1,0 +1,430 @@
+---
+title: "EDA On Pollution & Cancer"
+author: "Jianing Hu"
+date: "4/26/2022"
+output: html_document
+---
+
+# 5291 project EDA on Pollution + Cancer
+
+```{r, warning = F}
+library(tidyverse)
+library(dplyr)
+```
+
+## Import Data
+```{r, warning = F}
+site <- read_csv("site.csv")
+Filter_Pack_Concentrations_Weekly <- read_csv("Filter Pack Concentrations - Weekly.csv")
+site_new<- site %>% select(SITE_ID,STATE,COUNTY,LATITUDE,LONGITUDE,ELEVATION)
+data <- full_join(site_new,Filter_Pack_Concentrations_Weekly,by='SITE_ID') %>%
+  select(-QA_CODE,-DATEON,-COMMENT_CODES,-UPDATE_DATE,-ELEVATION,-TYPE,-TEMP_SOURCE, -TNO3, -NHNO3, -WSO2, -NSO4, -WNO3, -VALID_HOURS, -STD2LOCAL_CF, -FLOW_VOLUME) 
+cancer_raw <- read_csv("cancer_raw.csv")
+```
+
+## Transform Data
+
+```{r, warning = F}
+data$date <- as.Date(data$DATEOFF, "%m/%d/%Y")
+data <- data %>% select(-DATEOFF)
+data$year <- format(as.Date(data$date, "%F"), "%Y")
+colnames(data)[10] <- "Totoal_NA"
+data_year <- data %>% 
+  rename(state_abbr = STATE) %>% 
+  group_by(state_abbr, year) %>% 
+  summarise(avg_TSO4 = mean(TSO4,na.rm=TRUE),
+            avg_TNH4 = mean(TNH4,na.rm=TRUE),
+            avg_CA = mean(CA,na.rm=TRUE),
+            avg_MG = mean(MG,na.rm=TRUE),
+            avg_NA = mean(Totoal_NA,na.rm=TRUE),
+            avg_K = mean(K,na.rm=TRUE),
+            avg_CL = mean(CL,na.rm=TRUE),
+            avg_SO2 = mean(TOTAL_SO2,na.rm=TRUE), 
+            avg_NO3 = mean(TOTAL_NO3,na.rm=TRUE)) %>% 
+  ungroup()
+
+cancer_incidence <- cancer_raw %>%
+  select(AREA, AGE_ADJUSTED_RATE, COUNT, EVENT_TYPE, POPULATION, RACE, SEX, SITE, YEAR, Code) %>%
+  filter(SITE == 'Lung and Bronchus', EVENT_TYPE == 'Incidence', YEAR != '2014-2018') %>%
+  mutate(COUNT = as.integer(COUNT)) %>%
+  pivot_wider(names_from = EVENT_TYPE, values_from = COUNT) %>%
+  mutate(incidence_rate = Incidence/POPULATION) %>%
+  rename(state=AREA, state_abbr=Code,year=YEAR,population=POPULATION)
+
+cancer_mortality <- cancer_raw %>%
+  select(AREA, AGE_ADJUSTED_RATE, COUNT, EVENT_TYPE, POPULATION, RACE, SEX, SITE, YEAR, Code) %>%
+  filter(SITE == 'Lung and Bronchus', EVENT_TYPE == 'Mortality', YEAR != '2014-2018') %>%
+  mutate(COUNT = as.integer(COUNT)) %>%
+  pivot_wider(names_from = EVENT_TYPE, values_from = COUNT) %>%
+  mutate(mortality_rate = Mortality/POPULATION) %>%
+  rename(state=AREA, state_abbr=Code,year=YEAR,population=POPULATION)
+```
+
+
+
+## Missing Value in Cancer (Incidence / Mortality)
+
+```{r, warning = F}
+library(gt)
+cancer_incidence_na <- cancer_incidence %>%
+  filter(SEX != 'Male and Female') %>%
+  # Treat a state, same race w/ all years as a group
+  group_by(state, RACE) %>%
+  summarise(na_rate = round(sum(is.na(Incidence))/length(state), 2)) 
+
+cancer_incidence_na %>%
+  filter(na_rate == 0) %>%
+  group_by(RACE) %>%
+  tally() %>%
+  rename(group_without_na = n) %>%
+  inner_join(cancer_incidence_na %>% group_by(RACE) %>% tally() %>%
+               rename(total_group = n), by = "RACE") %>%
+  gt() %>%
+  tab_header(
+    title = md("Missing Incidence Values For Race (groups)"),
+    subtitle = md("Treat a state and same race w/ all years as a group"))
+
+cancer_mortality_na <- cancer_mortality %>%
+  filter(SEX != 'Male and Female') %>%
+  # Treat a state, same race w/ all years as a group
+  group_by(state, RACE) %>%
+  summarise(na_rate = round(sum(is.na(Mortality))/length(state), 2)) 
+
+cancer_mortality_na %>%
+  filter(na_rate == 0) %>%
+  group_by(RACE) %>%
+  tally() %>%
+  rename(group_without_na = n) %>%
+  inner_join(cancer_mortality_na %>% group_by(RACE) %>% tally() %>%
+               rename(total_group = n), by = "RACE") %>%
+  gt() %>%
+  tab_header(
+    title = md("Missing Mortality Values For Race (groups)"),
+    subtitle = md("Treat a state and same race w/ all years as a group"))
+
+sample_n_groups = function(grouped_df, size, replace = FALSE, weight=NULL) {
+  grp_var <- grouped_df %>% 
+    groups %>%
+    unlist %>% 
+    as.character
+  random_grp <- grouped_df %>% 
+    summarise() %>% 
+    sample_n(size, replace, weight) %>% 
+    mutate(unique_id = 1:NROW(.))
+  grouped_df %>% 
+    right_join(random_grp, by=grp_var) %>% 
+    group_by_(grp_var) 
+}
+
+cancer_incidence %>%
+  filter(SEX != 'Male and Female') %>%
+  filter(RACE == "All Races" | RACE == "White") %>%
+  group_by(state) %>%
+  sample_n_groups(3) %>%
+  group_by(SEX) %>%
+  ggplot(., aes(x = year, y = incidence_rate, group = RACE, color = RACE)) + 
+  geom_line() +
+  scale_y_log10() +
+  facet_grid(SEX ~ state) +
+  labs(title = "Incidence Race Comparison (All Races, White)", color = "Race") +
+  scale_x_discrete(guide = guide_axis(check.overlap = TRUE))
+
+
+cancer_incidence <- cancer_incidence %>% filter(RACE == "All Races")
+cancer_mortality <- cancer_mortality %>% filter(RACE == "All Races")
+```
+
+Here, we need to consider "sex" effects, so we filter out those data which belongs to "male and female" from our cancer data.
+
+Then we separate our cancer data by the categories of race and state which forms 258 groups in total. Each group contains all years' data of the same category of all these 2 features. 
+
+We were able to see definitively the number of missing mortality/incidence values in each category.
+
+Since only "white" and "all races" categories don't have missing incidence / mortality values, and all other categories contain numerous missing values. We prefer to use only the recordings belongs to "all races" but we need to verify whether other races have the same incidence / mortality trend with "all races". Since the "white" category don't have any missing values, we use this category as an instance to verify our preference.
+
+## Test for Homogeneity of Male & Female
+
+```{r, warning = F}
+cancer_incidence %>% 
+  filter(SEX != 'Male and Female') %>%
+  ggplot(., aes(x = incidence_rate)) +
+  geom_boxplot()+
+  scale_x_log10() +
+  facet_wrap(~SEX, ncol = 1)
+
+library(car)
+# Test for same variance 
+cancer_incidence_sex <- cancer_incidence %>% filter(SEX != 'Male and Female')
+leveneTest(cancer_incidence_sex$incidence_rate, cancer_incidence_sex$SEX)
+
+# Test for same mean
+t.test(incidence_rate ~ SEX,
+  data = cancer_incidence_sex,
+  var.equal = TRUE,
+  alternative = "two.sided"
+)
+
+# Test for same distribution (Kolmogorov-Smirnov test)
+male_incidence_rate <- (cancer_incidence_sex %>% filter(SEX == "Male"))$incidence_rate
+female_incidence_rate <- (cancer_incidence_sex %>% filter(SEX == "Female"))$incidence_rate
+ks.test(male_incidence_rate, female_incidence_rate)
+
+cancer_incidence <- cancer_incidence %>% filter(SEX != "Male and Female")
+cancer_mortality <- cancer_mortality %>% filter(SEX != "Male and Female")
+```
+
+Here we test whether incidence_rate has significant difference between male & female groups. 
+
+Since their incidence_rate indeed from the same distribution, we use the cancer data belongs to "male" & "female" category
+
+## Combine Data
+
+1. data type
+
+2. convert to numeric
+
+```{r, warning = F}
+pollution_cancer <- 
+  cancer_incidence %>% 
+  mutate(year = as.numeric(year)) %>%
+  rename(aar_incidence = AGE_ADJUSTED_RATE) %>%
+  inner_join(data_year %>% mutate(year = as.numeric(year)), 
+             by = c("state_abbr", "year")) %>%
+  inner_join(cancer_mortality %>%
+               select(year, state_abbr, AGE_ADJUSTED_RATE, mortality_rate, Mortality, SEX) %>%
+               mutate(year = as.numeric(year)) %>%
+               rename(aar_mortality = AGE_ADJUSTED_RATE),
+             by = c("state_abbr", "year", "SEX"))
+```
+
+## Data Type
+
+```{r, warning = F}
+str(pollution_cancer)
+pollution_cancer <- 
+  pollution_cancer %>% mutate_at(c('aar_incidence', 'aar_mortality'), as.numeric)
+```
+
+## Missing Values In Combined Data
+
+```{r, warning = F}
+# NAs
+library(naniar)
+gg_miss_upset(pollution_cancer)
+# year
+pollution_cancer %>% 
+  group_by(state) %>% 
+  tally() %>%
+  ggplot(., aes(x = n)) + 
+  geom_histogram(binwidth = 1) +
+  labs(title = 'Number of Years Per State') +
+  scale_x_continuous('Number of Years') +
+  scale_y_continuous('Number of states')
+```
+
+All pollutant concentrations have almost the same missing value pattern. There are 36 rows missing all five major pollutants and 104 rows missing only CL pollutants.
+
+Also, some of the states lack of some years' recordings
+
+## Numerical Features' Distribution (with Transformation)
+
+```{r, warning = F}
+# First, summary the numerical features 
+pollution_cancer %>%
+  keep(is.numeric) %>%
+  select(-year, -population, -Incidence, -Mortality) %>%
+  summary()
+
+library(moments)
+
+sk_kur <- pollution_cancer %>%
+  select(avg_CA, avg_K, avg_MG, avg_NA, avg_NO3, avg_SO2, avg_TSO4, avg_TNH4) %>%
+  filter(!is.na(avg_CA)) %>%
+  gather() %>% 
+  bind_rows(pollution_cancer %>% select(avg_CL) %>%
+              filter(!is.na(avg_CL)) %>%
+              mutate(key = "avg_CL") %>% 
+              rename(value = avg_CL)) %>%
+  group_by(key) %>%
+  summarise(Skew = round(skewness(log(value)), 3),
+            Kurtosis = round(kurtosis(log(value)), 3)) %>%
+  mutate(Skew=paste("Skew =", Skew),
+         Kurtosis = paste("Kurtosis =", Kurtosis))
+
+pollution_cancer %>%
+  select(avg_CA, avg_K, avg_MG, avg_NA, avg_NO3, avg_SO2, avg_TSO4, avg_TNH4) %>%
+  filter(!is.na(avg_CA)) %>%
+  gather() %>% 
+  bind_rows(pollution_cancer %>% select(avg_CL) %>%
+              filter(!is.na(avg_CL)) %>%
+              mutate(key = "avg_CL") %>% 
+              rename(value = avg_CL)) %>%
+  full_join(sk_kur, by = "key") %>%
+  mutate(key = paste(key, "(", Skew, Kurtosis, ")")) %>%
+  ggplot(aes(value)) +
+  facet_wrap(~ key, scales = "free") +
+  geom_histogram() +
+  scale_x_log10()
+
+sk_kur_cancer <- pollution_cancer %>%
+  select(aar_incidence, incidence_rate, aar_mortality, mortality_rate) %>%
+  gather() %>% 
+  group_by(key) %>%
+  summarise(Skew = round(skewness(value), 3),
+            Kurtosis = round(kurtosis(value), 3)) %>%
+  mutate(Skew=paste("Skew =", Skew),
+         Kurtosis = paste("Kurtosis =", Kurtosis))
+
+pollution_cancer %>%
+  select(aar_incidence, incidence_rate, aar_mortality, mortality_rate) %>%
+  gather() %>%
+  full_join(sk_kur_cancer, by = "key") %>%
+  mutate(key = paste(key, "(", Skew, Kurtosis, ")")) %>%
+  ggplot(aes(value)) +
+  facet_wrap(~ key, scales = "free") +
+  geom_histogram() 
+```
+
+Here, all pollutants values are in log scale. 
+
+We can see all histograms are almost normal distributed.
+
+We can also observe some outliers in some histograms, and only the distribution of avg_CL is highly skewed.
+
+We next detect and treat the outliers.
+
+## Outliers
+
+```{r, warning = F}
+pollution_cancer %>%
+  select(aar_incidence, incidence_rate, aar_mortality, mortality_rate) %>%
+  gather() %>% 
+  ggplot(aes(value)) +
+  geom_boxplot() +
+  facet_wrap(~ key, scales = "free", ncol = 2)
+
+library(outliers)
+
+incidence_rate <- pollution_cancer$incidence_rate
+grubbs.test(incidence_rate)
+grubbs.test(incidence_rate, opposite = T)
+
+aar_incidence <- pollution_cancer$aar_incidence
+grubbs.test(aar_incidence)
+grubbs.test(aar_incidence, opposite = T)
+
+mortality_rate <- pollution_cancer$mortality_rate
+grubbs.test(mortality_rate)
+grubbs.test(mortality_rate, opposite = T)
+
+aar_mortality <- pollution_cancer$aar_mortality
+grubbs.test(aar_mortality)
+grubbs.test(aar_mortality, opposite = T)
+```
+
+We use grubbs test to test whether the lowest and highest values in incidence_rate & mortality_rate & age adjusted rate are outliers.
+
+It shows that there's no outlier in all above variables.
+
+```{r, warning = F}
+pollution_cancer %>%
+  select(avg_CA, avg_K, avg_MG, avg_NA, avg_NO3, avg_SO2, avg_TSO4, avg_TNH4) %>%
+  filter(!is.na(avg_CA)) %>%
+  gather() %>% 
+  bind_rows(pollution_cancer %>% select(avg_CL) %>%
+              filter(!is.na(avg_CL)) %>%
+              mutate(key = "avg_CL") %>% 
+              rename(value = avg_CL)) %>%
+  ggplot(aes(value)) +
+  geom_boxplot() +
+  facet_wrap(~ key, scales = "free") +
+  coord_trans(x="log10")
+
+pollution_cancer %>%
+  select(avg_CA, state) %>%
+  arrange(desc(avg_CA)) %>%
+  distinct(., avg_CA, .keep_all = T) %>%
+  head(6) %>%
+  gt() %>%
+  tab_header(title = md("CA Extremums"))
+
+pollution_cancer %>%
+  select(avg_CL, state) %>%
+  arrange(desc(avg_CL)) %>%
+  distinct(., avg_CL, .keep_all = T) %>%
+  head(6) %>%
+  gt() %>%
+  tab_header(title = md("CL Extremums"))
+
+pollution_cancer %>%
+  select(avg_MG, state) %>%
+  arrange(desc(avg_MG)) %>%
+  distinct(., avg_MG, .keep_all = T) %>%
+  head(6) %>%
+  gt() %>%
+  tab_header(title = md("MG Extremums"))
+
+pollution_cancer %>%
+  select(avg_NA, state) %>%
+  arrange(desc(avg_NA)) %>%
+  distinct(., avg_NA, .keep_all = T) %>%
+  head(6) %>%
+  gt() %>%
+  tab_header(title = md("NA Extremums"))
+
+pollution_cancer %>%
+  select(avg_SO2, state) %>%
+  arrange(desc(avg_SO2)) %>%
+  distinct(., avg_SO2, .keep_all = T) %>%
+  head(6) %>%
+  gt() %>%
+  tab_header(title = md("SO2 Extremums"))
+```
+
+We can find some outliers in each pollutant data, also some extremums are included.
+
+However, we cannot arbitrarily delete them or cap them with sample median / mean here.
+
+Since we find out that the extremums of a pollutant values are always from the same state. 
+
+We cannot say this phenomenon is unreasonable.
+
+## Multicollinearity
+
+```{r, warning = F}
+library(GGally)
+pollution_cancer <- pollution_cancer %>%
+  select(state, year, mortality_rate, aar_mortality, incidence_rate, aar_incidence,
+         avg_NO3, avg_SO2, avg_TSO4, avg_TNH4, avg_CA, avg_K, avg_MG, avg_NA, avg_CL, SEX) %>%
+  mutate(Female = ifelse(SEX == "Female", 1, 0)) %>%
+  select(-SEX)
+
+pollution_cancer %>%
+  select(-state, -year, -Female) %>%
+  mutate_at(vars(starts_with("avg")), funs(lg = log(.))) %>%
+  select(-avg_NO3, -avg_SO2, -avg_TSO4, -avg_TNH4, -avg_CA, -avg_K, -avg_MG, -avg_NA, -avg_CL)%>%
+  rename(NO3 = avg_NO3_lg, SO2 = avg_SO2_lg, TSO4 = avg_TSO4_lg, TNH4 = avg_TNH4_lg,
+         CA = avg_CA_lg, K = avg_K_lg, MG = avg_MG_lg, po_NA = avg_NA_lg, CL = avg_CL_lg) %>%
+  ggpairs(., upper = list(continuous = wrap("cor", size = 2)),
+          lower = list(continuous = wrap("points", alpha = 0.3, size= 0.1)))+
+  ggtitle("Correlogram of Each Pair of the Indicators", subtitle = "Pollutants values are in log scale") +
+  theme_grey(base_size = 6)
+
+
+pollution_cancer_lg <- pollution_cancer %>% 
+  mutate_at(vars(starts_with("avg")), funs(lg = log(.))) %>%
+  select(-avg_NO3, -avg_SO2, -avg_TSO4, -avg_TNH4, -avg_CA, -avg_K, -avg_MG, -avg_NA, -avg_CL)
+```
+
+Attention needs to be paid to the multicollinearity between pollutants when doing analysis! 
+
+```{r}
+write.csv(pollution_cancer, file="pollution_cancer.csv")
+write.csv(pollution_cancer, file="pollution_cancer_lg.csv")
+```
+
+** NOTE:
+
+1. Teflon filter is considered to be more “chemically resistant” and Nylon filter to be the most “extractable free” for HPLC or Dissolution Testing. 
+
+2. Age Adjusted Rates is a rate that controls for the effects of differences in population age distributions. They eliminate the bias of age in the makeup of the populations being compared, thereby providing a much more reliable rate for comparison purposes.
