@@ -1,0 +1,154 @@
+---
+title: "pollution_time_series"
+author: "Yuwei Hu"
+date: "4/30/2022"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r, include=FALSE}
+library(xts)
+library(tidyverse)
+library(dygraphs)
+library(forecast)
+library(ggplot2)
+library(ggpubr)
+```
+
+
+## Data
+```{r,echo = FALSE}
+data <- read.csv("data/cleaned_pollution_data.csv")
+data <- data[,-1]
+data1 <- data%>%
+  select(SITE_ID,STATE,COUNTY,TNH4,K,TOTAL_NO3,date)%>%
+  filter(STATE == "NY")
+
+data_month <- data1 %>% 
+  mutate(month_year = paste(format(as.Date(date), "%Y-%m"),'01', sep='-')) %>% 
+  group_by(month_year) %>% 
+  summarise(aver_TNH4 = mean(TNH4), aver_K = mean(K), aver_NO3 = mean(TOTAL_NO3)) %>% 
+  ungroup()
+```
+
+## Visualization
+```{r,echo  = FALSE}
+g1<-ggplot(data_month, aes(as.Date(month_year), aver_TNH4)) + 
+  geom_line()+
+  labs(x = "", y = "TNH4")+
+  ggtitle("Time series of TNH4")
+
+g2<-ggplot(data_month, aes(as.Date(month_year), aver_K)) + 
+  geom_line()+
+  labs(x = "", y = "K")+
+  ggtitle("Time series of K")
+
+g3<-ggplot(data_month, aes(as.Date(month_year), aver_NO3)) + 
+  geom_line()+
+  labs(x = "", y = "NO3")+
+  ggtitle("Time series of NO3")
+
+ggarrange(g1,g2,g3, nrow = 2, ncol = 2)
+```
+
+
+## Stationarity
+
+From the time series graphs, we observed that time series of K is stationary, but time series of TNH4 and NO3 are not, which appear decreasing trend. Thus, we decompose time series of TNH4 and NO3 to separate them into trend and other components.
+
+**Decomposition of TNH4 data**
+
+```{r,echo = FALSE}
+data_month<-data_month%>%
+  mutate(year = format(as.Date(month_year), "%Y"),month = format(as.Date(month_year), "%b"))
+TNH4series<-ts(data_month$aver_TNH4,start=c(1999,1), end=c(2019,1), frequency=12)
+TNH4decomp<-decompose(TNH4series) 
+plot(TNH4decomp) 
+```
+
+**Decomposition of NO3 data**
+
+```{r,echo = FALSE}
+NO3series<-ts(data_month$aver_NO3,start=c(1999,1), end=c(2019,1), frequency=12)
+NO3decomp<-decompose(NO3series) 
+plot(NO3decomp) 
+```
+
+We observed that the trend in decomposition of these two time series is decreasing, same as what we supposed above.
+
+## Differencing
+
+```{r,echo = FALSE}
+tseries_diff_TNH4 <- diff(TNH4series)
+plot(tseries_diff_TNH4, ylab = "TNH4 (diff)", main = "Differencing TNH4 time series",)
+```
+
+```{r,echo = FALSE}
+tseries_diff_NO3 <- diff(NO3series)
+plot(tseries_diff_NO3, ylab = "NO3 (diff)", main = "Differencing NO3 time series")
+```
+
+
+## ACF and PACF
+
+```{r,echo = FALSE}
+par(mfrow=c(1,2))
+acf(tseries_diff_TNH4)
+pacf(tseries_diff_TNH4)
+```
+
+In ACF and PACF chart of TNH4 time series, we observe that ACF cuts off at 3rd point and PACF cuts off at 2nd point.
+
+```{r,echo = FALSE}
+Kseries<-ts(data_month$aver_K,start=c(1999,1), end=c(2019,1), frequency=12)
+par(mfrow=c(1,2))
+acf(Kseries)
+pacf(Kseries)
+```
+
+In ACF and PACF chart of K time series, we observe that ACF cuts off at 4th point and PACF cuts off at 1st point.
+
+```{r,echo = FALSE}
+par(mfrow=c(1,2))
+acf(tseries_diff_NO3)
+pacf(tseries_diff_NO3)
+```
+
+In ACF and PACF chart of NO3 time series, we observe that ACF cuts off at 3th point and PACF cuts off at 2st point.
+
+## Fitting in ARIMA model
+
+```{r,echo = FALSE}
+fit_TNH4 <- arima(TNH4series, order=c(1,1,2))
+fit_TNH4
+```
+
+We fit a ARIMA model for TNH4 time series including ARIMA(1,1,2) and ARIMA(1,1,3). ARIMA(1,1,2) has a smaller AIC value.
+
+```{r,echo = FALSE}
+fit_K <- arima(Kseries, order=c(4,1,2))
+fit_K
+```
+
+We fit a ARIMA model for K time series including ARIMA(4,1,1) and ARIMA(4,1,2). ARIMA(4,1,2) has a smaller AIC value.
+
+```{r,echo = FALSE}
+fit_NO3 <- arima(NO3series, order=c(2,1,4))
+fit_NO3
+```
+
+We fit a ARIMA model for NO3 time series including ARIMA(2,1,3) and ARIMA(2,1,4). ARIMA(2,1,4) has a smaller AIC value.
+
+## Forecasting by ARIMA
+```{r,echo = FALSE}
+autoplot(forecast(fit_TNH4),ylab = "TNH4", main = "Forecast for TNH4")
+```
+
+```{r,echo = FALSE}
+autoplot(forecast(fit_K),ylab = "K", main = "Forecast for K")
+```
+
+```{r,echo = FALSE}
+autoplot(forecast(fit_NO3),ylab = "NO3", main = "Forecast for NO3")
+```
